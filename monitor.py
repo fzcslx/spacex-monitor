@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
 """
 monitor.py — Telegram ping when a product appears on the SpaceX store.
-
-Default behaviour: watches for KEYWORDS (e.g. a "doge plushie" called "Asteroid")
-and pings the moment a matching product is published. Set NOTIFY_ALL_NEW=true to
-ALSO get a quieter heads-up for any brand-new product, as a backup.
-
-Pings once per product (won't re-spam). State is kept in alerted_products.json.
 """
 
 import json
@@ -15,7 +9,6 @@ import time
 import pathlib
 import requests
 
-# ---- Config (set via env / GitHub secrets) --------------------------------
 STORE = os.environ.get("STORE_URL", "https://shop.spacex.com")
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
@@ -27,10 +20,9 @@ NOTIFY_ALL_NEW = os.environ.get("NOTIFY_ALL_NEW", "false").lower() == "true"
 
 STATE_FILE = pathlib.Path(os.environ.get("STATE_FILE", "alerted_products.json"))
 USER_AGENT = "spacex-product-monitor/1.0 (personal use)"
-# ---------------------------------------------------------------------------
 
 
-def fetch_all_products(store: str) -> list[dict]:
+def fetch_all_products(store: str) -> list:
     products, page = [], 1
     while True:
         url = f"{store}/products.json?limit=250&page={page}"
@@ -45,7 +37,7 @@ def fetch_all_products(store: str) -> list[dict]:
     return products
 
 
-def matched_keyword(product: dict) -> str | None:
+def matched_keyword(product: dict):
     tags = product.get("tags", [])
     tags = tags if isinstance(tags, list) else [str(tags)]
     haystack = " ".join([
@@ -60,17 +52,17 @@ def matched_keyword(product: dict) -> str | None:
     return None
 
 
-def load_alerted() -> set[int]:
+def load_alerted():
     if STATE_FILE.exists():
         return set(json.loads(STATE_FILE.read_text()))
     return set()
 
 
-def save_alerted(ids: set[int]) -> None:
+def save_alerted(ids):
     STATE_FILE.write_text(json.dumps(sorted(ids)))
 
 
-def notify(product: dict, keyword: str | None) -> None:
+def notify(product: dict, keyword):
     title = product.get("title", "Untitled")
     handle = product.get("handle", "")
     link = f"{STORE}/products/{handle}"
@@ -90,7 +82,7 @@ def notify(product: dict, keyword: str | None) -> None:
     r.raise_for_status()
 
 
-def main() -> None:
+def main():
     first_run = not STATE_FILE.exists()
     products = fetch_all_products(STORE)
     alerted = load_alerted()
@@ -103,5 +95,26 @@ def main() -> None:
             continue
         kw = matched_keyword(p)
         if kw:
-            notify(p, kw)                 # keyword match: always alert
+            notify(p, kw)
             to_save.add(pid)
+            hits += 1
+            print(f"ALERT (keyword '{kw}'): {p['title']}")
+            time.sleep(0.5)
+        elif NOTIFY_ALL_NEW:
+            if first_run:
+                to_save.add(pid)
+            else:
+                notify(p, None)
+                to_save.add(pid)
+                hits += 1
+                print(f"ALERT (new item): {p['title']}")
+                time.sleep(0.5)
+
+    if to_save != alerted:
+        save_alerted(to_save)
+    print(f"Checked {len(products)} products. {hits} alert(s). "
+          f"Keywords={KEYWORDS} NotifyAllNew={NOTIFY_ALL_NEW} FirstRun={first_run}")
+
+
+if __name__ == "__main__":
+    main()
